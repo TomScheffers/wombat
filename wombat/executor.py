@@ -6,7 +6,12 @@ class Plan():
         self.database, self.last, self.cache_dict = node.database, node, node.cache_dict
 
     def __getitem__(self, key):
-        if key in self.last.columns_available:
+        if isinstance(key, ColumnNode):
+            if key.boolean:
+                self.last = BooleanMaskNode(self.last, key, self.cache_dict)
+            else:
+                raise Exception('Column must be boolean to be used in selection')
+        elif key in self.last.columns_available:
             return ColumnNode(key, required=[key])
         else:
             raise Exception("{} not a valid column reference")
@@ -33,12 +38,16 @@ class Plan():
             self.last = JoinNode(self.last, right.last, on, self.cache_dict)
         return self
 
-    def groupby(self, by):
-        self.last = GroupbyNode(self.last, by, self.cache_dict)
+    def aggregate(self, by, methods):
+        self.last = AggregateNode(self.last, by, methods, self.cache_dict)
         return self
 
-    def agg(self, methods):
-        self.last = AggregateNode(self.last, methods, self.cache_dict)
+    def rename(self, mapping):
+        self.last = SelectionNode(self.last, list(mapping.keys()), aliases=list(mapping.values()))
+        return self
+
+    def select(self, columns):
+        self.last = SelectionNode(self.last, columns)
         return self
 
     def orderby(self, key, ascending=True):

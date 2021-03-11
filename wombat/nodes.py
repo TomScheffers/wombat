@@ -1,4 +1,5 @@
 import pyarrow as pa
+import numpy as np
 from pyarrow_ops import join, groupby, filters
 import hashlib, json, time
 
@@ -8,7 +9,7 @@ class BaseNode():
         assert all(c in self.columns_available for c in self.columns_forward)
 
     def columns_bw(self, columns_backward):
-        self.columns_backward = sorted(list(set(self.columns_forward + columns_backward)))
+        self.columns_backward = [c for c in sorted(list(set(self.columns_forward + columns_backward))) if c in self.columns_available]
         return self.columns_backward
 
     def hash(self, h=None):
@@ -16,7 +17,7 @@ class BaseNode():
         fields = ['name', 'on', 'filters', 'by', 'methods', 'key', 'ascending', 'columns_backward']
         if not h:
             h = hashlib.sha256()
-        obj = {k:v for k,v in self.__dict__.items() if k in fields}
+        obj = {k: v for k,v in self.__dict__.items() if k in fields}
         obj['__name__'] = self.__class__.__name__
         h.update(json.dumps(obj, sort_keys=True).encode())
         self.hash_key = h.hexdigest()
@@ -29,16 +30,16 @@ class BaseNode():
         return self.hash(h=hp)
 
     def get(self):
+        self.time = time.time()
         if self.cache and self.hash_key in self.cache_dict.keys():
-            print("Got value from cache for node:", type(self))
-            return self.cache_dict[self.hash_key]
+            t = self.cache_dict[self.hash_key]
+            print("Node: {} Rows: {} Cumulative Time: {:2f} (cached)".format(self.__class__.__name__.ljust(16), str(t.num_rows).ljust(9), time.time() - self.time))
         else:
-            self.time = time.time()
             t = self.fetch()
-            print("Cumulative time: ", type(self), time.time() - self.time)
+            print("Node: {} Rows: {} Cumulative Time: {:2f}".format(self.__class__.__name__.ljust(16), str(t.num_rows).ljust(9), time.time() - self.time))
             if self.cache:
                 self.cache_dict[self.hash_key] = t
-            return t
+        return t
 
 # Sources
 class TableNode(BaseNode):
@@ -158,7 +159,7 @@ class JoinNode(BaseNode):
 
             # Skip if there is only 1 value
             if (l_mmx == r_mmx) and (l_mmx[0] == l_mmx[1]):
-                print("Skipping on column:", o)
+                # print("Skipping on column:", o)
                 continue
             
             # Add column to join condition
@@ -190,31 +191,18 @@ class FilterNode(BaseNode):
     def fetch(self):
         return self.parent.get()
 
-class GroupbyNode(BaseNode):
-    def __init__(self, parent, by, cache_dict=None):
-        self.parent, self.by, self.cache_dict = parent, by, cache_dict
-        self.cache = (cache_dict != None)
-
-        # Forward propagation of nodes
-        self.columns_available, self.columns_forward, self.filters_forward = parent.columns_available, list(set(parent.columns_forward + by)), parent.filters_forward
-        self.check()
-
-    def fetch(self):
-        tp = self.parent.get()
-        return groupby(tp, self.by)
-
 class AggregateNode(BaseNode):
-    def __init__(self, parent, methods, cache_dict=None):
-        self.parent, self.methods, self.cache_dict = parent, methods, cache_dict
+    def __init__(self, parent, by, methods, cache_dict=None):
+        self.parent, self.by, self.methods, self.cache_dict = parent, (by if isinstance(by, list) else [by]), methods, cache_dict
         self.cache = (cache_dict != None)
 
         # Forward propagation of nodes
-        self.columns_available, self.columns_forward, self.filters_forward = parent.columns_available, list(set(parent.columns_forward + list(self.methods.keys()))), parent.filters_forward
+        self.columns_available, self.columns_forward, self.filters_forward = parent.columns_available, list(set(parent.columns_forward + self.by + list(self.methods.keys()))), parent.filters_forward
         self.check()
 
     def fetch(self):
         tp = self.parent.get()
-        return tp.agg(self.methods)
+        return groupby(tp, self.by).agg(self.methods)
 
 class OrderNode(BaseNode):
     def __init__(self, parent, key, ascending, cache_dict=None):
@@ -230,11 +218,28 @@ class OrderNode(BaseNode):
         idxs = pa.compute.sort_indices(tp.column(self.key)).to_numpy()
         return (tp.take(idxs) if self.ascending else tp.take(idxs[::-1]))
 
+class SelectionNode(BaseNode):
+    def __init__(self, parent, columns, aliases=[], cache_dict=None):
+        self.parent, self.columns, self.aliases, self.cache_dict = parent, columns, aliases, cache_dict
+        self.cache = (cache_dict != None)
+
+        # Forward propagation of nodes
+        self.mapping = (dict(zip(columns, aliases)) if aliases else {}) 
+        self.columns_available, self.columns_forward, self.filters_forward = parent.columns_available + self.aliases, list(set(parent.columns_forward + columns)), parent.filters_forward
+        self.check()
+
+    def fetch(self):
+        tp = self.parent.get()
+        if self.aliases:
+            return tp.rename_columns([self.mapping.get(col, col) for col in tp.column_names])
+        else:
+            return tp.select(self.columns)
+
+# Numerical & logical operations 
 class ColumnNode(BaseNode):
-    def __init__(self, key, required, func=None, depth=0):
-        self.key, self.required, self.depth = key, required, depth
+    def __init__(self, key, required, func=None, depth=0, boolean=False):
+        self.key, self.required, self.depth, self.boolean = key, required, depth, boolean
         self.f = (lambda t: t[self.key] if not func else func)
-        print(key, self.f)
 
     def get(self, t):
         f = self.f
@@ -242,28 +247,101 @@ class ColumnNode(BaseNode):
             f = self.f(t)
         return f(t)
 
-    def add_requirements(self, other):
-        self.required = list(set(self.required + other.required))
+    def breed(self, op, other_key, f, required=[], boolean=False):
+        key = '(' + self.key + op + other_key + ')'
+        return ColumnNode(key=key, required=self.required + required, func=f, depth=self.depth + 1, boolean=boolean)
 
     def __add__(self, other):
-        f = lambda t: pa.compute.add(self.get(t), other.get(t))
-        return ColumnNode(key=self.key + '+' + other.key, required=self.required + other.required, func=f, depth=self.depth + 1)
+        if isinstance(other, self.__class__):
+            f = lambda t: pa.compute.add(self.get(t), other.get(t))
+            return self.breed('+', other.key, f, required=other.required)
+        else:
+            f = lambda t: pa.compute.add(self.get(t), pa.scalar(other))
+            return self.breed('+', str(other), f)
 
     def __sub__(self, other):
-        self.add_requirements(other)
-        return
+        if isinstance(other, self.__class__):
+            f = lambda t: pa.compute.subtract(self.get(t), other.get(t))
+            return self.breed('-', other.key, f, required=other.required)
+        else:
+            f = lambda t: pa.compute.subtract(self.get(t), pa.scalar(other))
+            return self.breed('-', str(other), f)
 
     def __mul__(self, other):
-        return
+        if isinstance(other, self.__class__):
+            f = lambda t: pa.compute.multiply(self.get(t), other.get(t))
+            return self.breed('*', other.key, f, required=other.required)
+        else:
+            f = lambda t: pa.compute.multiply(self.get(t), pa.scalar(other))
+            return self.breed('*', str(other), f)
 
     def __truediv__(self, other):
-        return
-
-    def __floordiv__(self, other):
-        return
+        if isinstance(other, self.__class__):
+            f = lambda t: pa.compute.divide(self.get(t), other.get(t))
+            return self.breed('/', other.key, f, required=other.required)
+        else:
+            f = lambda t: pa.compute.divide(self.get(t), pa.scalar(other))
+            return self.breed('/', str(other), f)
 
     def __pow__(self, other):
-        return
+        if isinstance(other, self.__class__):
+            f = lambda t: pa.array(np.power(self.get(t).to_numpy(), other.get(t).to_numpy()))
+            return self.breed('^', other.key, f, required=other.required)
+        else:
+            f = lambda t: pa.array(np.power(self.get(t), other))
+            return self.breed('^', str(other), f)
+    
+    def __lt__(self, other):
+        if isinstance(other, self.__class__):
+            f = lambda t: pa.compute.less(self.get(t), other.get(t))
+            return self.breed('<', other.key, f, required=other.required, boolean=True)
+        else:
+            f = lambda t: pa.compute.less(self.get(t), pa.scalar(other))
+            return self.breed('<', str(other), f, boolean=True)
+
+    def __le__(self, other):
+        if isinstance(other, self.__class__):
+            f = lambda t: pa.compute.less_equal(self.get(t), other.get(t))
+            return self.breed('<', other.key, f, required=other.required, boolean=True)
+        else:
+            f = lambda t: pa.compute.less_equal(self.get(t), pa.scalar(other))
+            return self.breed('<', str(other), f, boolean=True)
+
+    def __gt__(self, other):
+        if isinstance(other, self.__class__):
+            f = lambda t: pa.compute.greater(self.get(t), other.get(t))
+            return self.breed('>', other.key, f, required=other.required, boolean=True)
+        else:
+            f = lambda t: pa.compute.greater(self.get(t), pa.scalar(other))
+            return self.breed('>', str(other), f, boolean=True)
+
+    def __ge__(self, other):
+        if isinstance(other, self.__class__):
+            f = lambda t: pa.compute.greater_equal(self.get(t), other.get(t))
+            return self.breed('>=', other.key, f, required=other.required, boolean=True)
+        else:
+            f = lambda t: pa.compute.greater_equal(self.get(t), pa.scalar(other))
+            return self.breed('>=', str(other), f, boolean=True)
+
+    def __eq__(self, other):
+        if isinstance(other, self.__class__):
+            f = lambda t: pa.compute.equal(self.get(t), other.get(t))
+            return self.breed('=', other.key, f, required=other.required, boolean=True)
+        else:
+            f = lambda t: pa.compute.equal(self.get(t), pa.scalar(other))
+            return self.breed('=', str(other), f, boolean=True)
+
+    def __ne__(self, other):
+        if isinstance(other, self.__class__):
+            f = lambda t: pa.compute.not_equal(self.get(t), other.get(t))
+            return self.breed('!=', other.key, f, required=other.required, boolean=True)
+        else:
+            f = lambda t: pa.compute.not_equal(self.get(t), pa.scalar(other))
+            return self.breed('!=', str(other), f, boolean=True)
+
+    def __invert__(self):
+        f = lambda t: pa.compute.invert(self.get(t))
+        return ColumnNode(key='~' + self.key, required=self.required, func=f, depth=self.depth + 1, boolean=True)
 
 class CalculationNode(BaseNode):
     def __init__(self, parent, key, column, cache_dict=None):
@@ -271,10 +349,21 @@ class CalculationNode(BaseNode):
         self.cache = (cache_dict != None)
     
         # Forward propagation of nodes
-        self.columns_available, self.columns_forward, self.filters_forward = parent.columns_available + column.required, list(set(parent.columns_forward + column.required)), parent.filters_forward
+        self.columns_available, self.columns_forward, self.filters_forward = parent.columns_available + [key], parent.columns_forward, parent.filters_forward
         self.check()
     
     def fetch(self):
         tp = self.parent.get()
         t = tp.append_column(self.key, self.column.get(tp))
+        return t
+
+class BooleanMaskNode(BaseNode):
+    def __init__(self, parent, mask, cache_dict=None):
+        self.parent, self.mask, self.cache_dict = parent, mask, cache_dict
+        self.cache = (cache_dict != None)
+        self.columns_available, self.columns_forward, self.filters_forward = parent.columns_available, parent.columns_forward, parent.filters_forward
+    
+    def fetch(self):
+        tp = self.parent.get()
+        t = tp.filter(self.mask.get(tp))
         return t
