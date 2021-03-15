@@ -1,5 +1,6 @@
-from wombat import Database
+from wombat import Engine
 from pyarrow_ops import head
+import pyarrow as pa
 import pyarrow.parquet as pq
 
 # Avoid initial take() time
@@ -11,7 +12,7 @@ d1 = pq.ParquetDataset('data/skus')
 d2 = pq.ParquetDataset('data/stock_current')
 
 # Database and register tables
-db = Database(cache=True)
+db = Engine(cache=True)
 db.register_dataset('skus', d1)
 db.register_dataset('stock_current', d2)
 
@@ -41,6 +42,10 @@ df[(df['stock'] < 20000)]
 
 # TODO: make df[df['threshold']] work
 
+# Register UDF
+db.register_udf('power', lambda arr: pa.array(arr.to_numpy() ** 2))
+df['economical ** 2'] = df.udf('power', df['economical'])
+
 # Rename columns
 df.rename({
     'economical': 'economical_sum',
@@ -48,7 +53,7 @@ df.rename({
 })
 
 # Select columns
-df.select(['option_key', 'economical_sum', 'calculated', 'threshold'])
+df.select(['option_key', 'economical_sum', 'calculated', 'threshold', 'economical ** 2'])
 
 # You do not need to catch the return for chaining of operations
 df.orderby('calculated', ascending=False)

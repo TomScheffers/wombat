@@ -1,0 +1,13 @@
+digraph {
+	1 [label="name: OrderNode\lkey: economical\lascending: False\lfilters: [(org_key, =, 0), (store_key, <=, 200)]" shape=box]
+	2 [label="name: AggregateNode\lby: [option_key]\lmethods: {economical: sum}\lfilters: [(org_key, =, 0), (store_key, <=, 200)]" shape=box]
+	2 -> 1
+	3 [label="name: FilterNode\lfilters: [(org_key, =, 0), (store_key, <=, 200)]" shape=box]
+	3 -> 2
+	4 [label="name: JoinNode\lon: [org_key, sku_key]\lfilters: [(org_key, =, 0), (store_key, <=, 200)]" shape=box]
+	4 -> 3
+	5 [label="name: DatasetNode\ltable: skus\lfilters: [(org_key, =, 0)]" shape=box]
+	5 -> 4
+	6 [label="name: DatasetNode\ltable: stock_current\lfilters: [(org_key, =, 0), (store_key, <=, 200)]" shape=box]
+	6 -> 4
+}

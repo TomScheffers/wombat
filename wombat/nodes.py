@@ -12,14 +12,20 @@ class BaseNode():
         self.columns_backward = [c for c in sorted(list(set(self.columns_forward + columns_backward))) if c in self.columns_available]
         return self.columns_backward
 
+    def properties(self):
+        fields = ['table', 'on', 'filters', 'by', 'methods', 'key', 'ascending', 'calculation', 'columns_backward']
+        obj = {k: v for k,v in self.__dict__.items() if k in fields}
+        return {**{'name': self.__class__.__name__}, **obj}
+
+    def graph_info(self):
+        obj = self.properties()
+        return "\\l".join([k + ': ' + str(v).replace("'", "") for k,v in obj.items() if k not in ['columns_backward']])
+
     def hash(self, h=None):
         # We want to add: on, by, columns_backward, table_url
-        fields = ['name', 'on', 'filters', 'by', 'methods', 'key', 'ascending', 'columns_backward']
         if not h:
             h = hashlib.sha256()
-        obj = {k: v for k,v in self.__dict__.items() if k in fields}
-        obj['__name__'] = self.__class__.__name__
-        h.update(json.dumps(obj, sort_keys=True).encode())
+        h.update(json.dumps(self.properties(), sort_keys=True).encode())
         self.hash_key = h.hexdigest()
         return h
 
@@ -43,10 +49,10 @@ class BaseNode():
 
 # Sources
 class TableNode(BaseNode):
-    def __init__(self, name, database, cache_dict=None):
-        self.name, self.database, self.cache_dict = name, database, cache_dict
+    def __init__(self, table, database, cache_dict=None):
+        self.table, self.database, self.cache_dict = table, database, cache_dict
         self.cache = (cache_dict != None)
-        self.table = self.database.tables[name]
+        self.table = self.database.tables[table]
 
         # Forward propagation of nodes
         self.columns_available, self.columns_forward, self.filters_forward = self.table.column_names, [], []
@@ -88,10 +94,10 @@ def part_check(part, op, value):
         raise Exception("Operand {} is not implemented!".format(op))
 
 class DatasetNode(BaseNode):
-    def __init__(self, name, database, cache_dict=None):
-        self.name, self.database, self.cache_dict = name, database, cache_dict
+    def __init__(self, table, database, cache_dict=None):
+        self.table, self.database, self.cache_dict = table, database, cache_dict
         self.cache = (cache_dict != None)
-        self.dataset = database.datasets[name]
+        self.dataset = database.datasets[table]
 
         self.partition_keys = [p.name for p in self.dataset.partitions]
         self.partition_values = [{pk[0]: dp.keys[pk[1]] for pk, dp in zip(p.partition_keys, self.dataset.partitions)} for p in self.dataset.pieces]
@@ -286,10 +292,10 @@ class ColumnNode(BaseNode):
     def __pow__(self, other):
         if isinstance(other, self.__class__):
             f = lambda t: pa.array(np.power(self.get(t).to_numpy(), other.get(t).to_numpy()))
-            return self.breed('^', other.key, f, required=other.required)
+            return self.breed('**', other.key, f, required=other.required)
         else:
             f = lambda t: pa.array(np.power(self.get(t), other))
-            return self.breed('^', str(other), f)
+            return self.breed('**', str(other), f)
     
     def __lt__(self, other):
         if isinstance(other, self.__class__):
@@ -343,13 +349,29 @@ class ColumnNode(BaseNode):
         f = lambda t: pa.compute.invert(self.get(t))
         return ColumnNode(key='~' + self.key, required=self.required, func=f, depth=self.depth + 1, boolean=True)
 
+    @classmethod
+    def udf(cls, name, function, arguments):
+        if isinstance(arguments, dict):
+            f = lambda t: function(**{k: (v.get(t) if isinstance(v, ColumnNode) else v) for k,v in arguments.items()})
+            keys = ', '.join([(v.key if isinstance(v, ColumnNode) else str(v)) for v in arguments.values()])
+            depth = max([0] + [v.depth for v in arguments.values() if isinstance(v, ColumnNode)]) + 1
+            required = list(set([r for v in arguments.values() if isinstance(v, ColumnNode) for r in v.required]))
+        else:
+            if isinstance(arguments, ColumnNode):
+                f = lambda t: function(arguments.get(t))
+                keys, depth, required = arguments.key, arguments.depth + 1, arguments.required
+            else:
+                f = lambda t: function(arguments)
+                keys, depth, required = str(arguments), 0, []
+        return cls(key=name + '(' + keys + ')', required=required, func=f, depth=depth)
+
 class CalculationNode(BaseNode):
     def __init__(self, parent, key, column, cache_dict=None):
-        self.parent, self.key, self.column, self.cache_dict = parent, key, column, cache_dict
+        self.parent, self.key, self.calculation, self.column, self.cache_dict = parent, key, column.key, column, cache_dict
         self.cache = (cache_dict != None)
     
         # Forward propagation of nodes
-        self.columns_available, self.columns_forward, self.filters_forward = parent.columns_available + [key], parent.columns_forward, parent.filters_forward
+        self.columns_available, self.columns_forward, self.filters_forward = parent.columns_available + [key], parent.columns_forward + column.required, parent.filters_forward
         self.check()
     
     def fetch(self):
