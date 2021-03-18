@@ -1,5 +1,4 @@
-from wombat import Engine
-from pyarrow_ops import head
+from wombat import Engine, head
 import pyarrow as pa
 import pyarrow.parquet as pq
 
@@ -12,7 +11,7 @@ d1 = pq.ParquetDataset('data/skus')
 d2 = pq.ParquetDataset('data/stock_current')
 
 # Database and register tables
-db = Engine(cache=True)
+db = Engine(cache_memory=1e9)
 db.register_dataset('skus', d1)
 db.register_dataset('stock_current', d2)
 
@@ -31,11 +30,11 @@ df = df.filter([('org_key', '=', 0), ('store_key', '<=', 200)]) \
     )
 
 # Selecting strings from the Dataframe object, yields a column reference
-df['stock'] = df['economical']
+df['stock'] = df['economical'].coalesce(0).least(df['technical']).greatest(0)
 
 # A column reference can be used for numerical & logical operations
-df['calculated'] = (df['stock'] - 100) ** 2 / 5000 - df['stock']
-df['threshold'] = ~(df['calculated'] > 5000)
+df['calculated'] = ((df['stock'] - 100) ** 2 / 5000 - df['stock']).clip(None, 5000)
+df['check'] = ~(df['calculated'] == 5000)
 
 # We can filter using the boolean column as value
 df[(df['stock'] < 20000)]
@@ -53,7 +52,7 @@ df.rename({
 })
 
 # Select columns
-df.select(['option_key', 'economical_sum', 'calculated', 'threshold', 'economical ** 2'])
+df.select(['option_key', 'economical_sum', 'calculated', 'check', 'economical ** 2'])
 
 # You do not need to catch the return for chaining of operations
 df.orderby('calculated', ascending=False)
@@ -75,7 +74,7 @@ df = db['stock_current'] \
         }
     ) \
     .orderby('economical', ascending=False)
-r = df.collect()
+r = df.collect(verbose=True)
 head(r)
 
 

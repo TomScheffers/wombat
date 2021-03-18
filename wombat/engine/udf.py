@@ -1,5 +1,9 @@
 import numpy as np
 import pyarrow as pa
+import json, time
+
+def json_to_struct(arr):
+    return pa.array(np.vectorize(json.loads)(arr))
 
 def text_extract(text, key):
     value = '"' + key + '":'

@@ -1,15 +1,15 @@
-from wombat.nodes import *
-from wombat.sql import parse_sql
+from wombat.engine.nodes import *
+from wombat.engine.sql import parse_sql
 
 # Computation plan (of multiple nodes)
 class Plan():
     def __init__(self, node):
-        self.database, self.last, self.cache_dict = node.database, node, node.cache_dict
+        self.database, self.last, self.cache_obj = node.database, node, node.cache_obj
 
     def __getitem__(self, key):
         if isinstance(key, ColumnNode):
             if key.boolean:
-                self.last = BooleanMaskNode(self.last, key, self.cache_dict)
+                self.last = BooleanMaskNode(self.last, key, self.cache_obj)
             else:
                 raise Exception('Column must be boolean to be used in selection')
         elif key in self.last.columns_available:
@@ -19,40 +19,43 @@ class Plan():
 
     def __setitem__(self, key, value):
         if isinstance(value, ColumnNode):
-            self.last = CalculationNode(self.last, key, value, cache_dict=self.cache_dict)
+            self.last = CalculationNode(self.last, key, value, cache_obj=self.cache_obj)
         else:
             raise Exception("Value must be a column node reference")
 
-    def collect(self):
+    def collect(self, verbose=False):
         self.last.backward(columns_backward=self.last.columns_forward, filters_backward=self.last.filters_forward)
-        return self.last.get()
+        return self.last.get(verbose)
 
     def filter(self, filters):
-        self.last = FilterNode(self.last, filters, cache_dict=self.cache_dict)
+        self.last = FilterNode(self.last, filters, cache_obj=self.cache_obj)
         return self
 
     def join(self, right, on):
         if isinstance(right, str):
             plan = self.database.select(right)
-            self.last = JoinNode(self.last, plan.last, on, cache_dict=self.cache_dict)
+            self.last = JoinNode(self.last, plan.last, on, cache_obj=self.cache_obj)
         else:
-            self.last = JoinNode(self.last, right.last, on, cache_dict=self.cache_dict)
+            self.last = JoinNode(self.last, right.last, on, cache_obj=self.cache_obj)
         return self
 
     def aggregate(self, by, methods):
-        self.last = AggregateNode(self.last, by, methods, cache_dict=self.cache_dict)
+        self.last = AggregateNode(self.last, by, methods, cache_obj=self.cache_obj)
         return self
 
     def rename(self, mapping):
-        self.last = SelectionNode(self.last, list(mapping.keys()), aliases=list(mapping.values()), cache_dict=self.cache_dict)
+        self.last = SelectionNode(self.last, list(mapping.keys()), aliases=list(mapping.values()), cache_obj=self.cache_obj)
         return self
 
     def select(self, columns):
-        self.last = SelectionNode(self.last, columns, cache_dict=self.cache_dict)
+        self.last = SelectionNode(self.last, columns, cache_obj=self.cache_obj)
         return self
 
     def orderby(self, key, ascending=True):
-        self.last = OrderNode(self.last, key, ascending, cache_dict=self.cache_dict)
+        self.last = OrderNode(self.last, key, ascending, cache_obj=self.cache_obj)
+        return self
+
+    def fillna(self, columns, value):
         return self
 
     def udf(self, name, arguments):
@@ -86,15 +89,41 @@ class Plan():
         dot.render('plan/{}'.format(name), view=True)
         return
 
-# The database class is used to:
-# 1. Register tables
-# 2. Create a new query plan
-# 3. Optimize a query plan
-# 4. Execute a query plan
+class Cache():
+    def __init__(self, max_memory=1e9):
+        self.tables, self.importance, self.memory, self.max_memory = {}, {}, 0, max_memory
+
+    def put(self, key, table, weight=1.0):
+        self.importance[key] = self.importance.get(key, 0.0) + weight
+        if key not in self.tables.keys():
+            b = table.nbytes
+            while True:
+                if self.memory + b < self.max_memory:
+                    self.tables[key] = table
+                    self.memory += b
+                    return
+                
+                importances = [self.importance[k] for k in self.tables.keys()]
+                if not importances:
+                    return
+                
+                if self.importance[key] > min(importances):
+                    min_key = importances.index(min(importances))
+                    self.memory -= self.tables[min_key]
+                    del self.tables[min_key]
+                else:
+                    return
+
+    def keys(self):
+        return self.tables.keys()
+
+    def __getitem__(self, key):
+        return self.tables[key]
+
 class Engine():
-    def __init__(self, cache=True):
-        self.cache, self.tables, self.datasets, self.udfs = cache, {}, {}, {}
-        self.cache_dict = ({} if cache else None)
+    def __init__(self, cache_memory=0):
+        self.cache, self.tables, self.datasets, self.udfs = (cache_memory > 0), {}, {}, {}
+        self.cache_obj = (Cache(max_memory=cache_memory) if self.cache else None)
 
     def register_table(self, name, table):
         self.tables[name] = table
@@ -111,13 +140,12 @@ class Engine():
     def select(self, name):
         # Return a plan from a source node
         if name in self.tables.keys():
-            return Plan(TableNode(name, self, cache_dict=self.cache_dict))
+            return Plan(TableNode(name, self, cache_obj=self.cache_obj))
         elif name in self.datasets.keys():
-            return Plan(DatasetNode(name, self, cache_dict=self.cache_dict))
+            return Plan(DatasetNode(name, self, cache_obj=self.cache_obj))
         else:
             raise Exception("{} not in registered tables or datasets".format(name))
 
     def sql(self, sql):
         # Parse subqueries
         return parse_sql(self, sql)
-
