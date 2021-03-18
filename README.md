@@ -26,7 +26,7 @@ pip install wombat
 ```
 
 ## Usage
-See test_*.py for test examples
+See tests folder for more code examples
 
 Dataframe API:
 ```python
@@ -78,13 +78,7 @@ head(r)
 df = db['stock_current'] \
     .join(db['skus'], on=['org_key', 'sku_key']) \
     .filter([('org_key', '=', 0), ('store_key', '<=', 200)]) \
-    .aggregate(
-        by=['option_key'],
-        methods={
-            'economical': 'max', 
-            'technical':'sum'
-        }
-    ) \
+    .aggregate(by=['option_key'], methods={'economical': 'max', 'technical':'sum'}) \
     .orderby('economical', ascending=False)
 r = df.collect(verbose=True)
 head(r)
