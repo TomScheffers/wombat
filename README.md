@@ -2,7 +2,7 @@
 Wombat is Python libary for data crunching operations directly on the pyarrow.Table class, implemented in numpy & Cython. For convenience, function naming and behavior tries to replicates that of the Pandas API / Postgresql language.
 
 Current features:
-- Dataframe API (lazy execution):
+- Engine API (lazy execution):
     - Operate directly on Pyarrow tables and datasets
     - Filter push-downs to optimize speed (only read subset of partitions)
     - Column tracking: only read subset of columns in data
@@ -16,13 +16,14 @@ Current features:
     - Categorical, numericals and one-hot processing directly on pa.Tables
     - Reusable: Serialize cleaners to JSON for using in inference
 - SQL API (under construction)
+- DB Management API (under construction)
 
 ## Installation
 
 Use the package manager [pip](https://pip.pypa.io/en/stable/) to install wombat.
 
 ```bash
-pip install wombat
+pip install wombat_db
 ```
 
 ## Usage
@@ -51,10 +52,9 @@ df['stock'] = df['economical'].coalesce(0).least(df['technical']).greatest(0)
 
 # A column reference can be used for numerical & logical operations
 df['calculated'] = ((df['stock'] - 100) ** 2 / 5000 - df['stock']).clip(None, 5000)
-df['check'] = ~(df['calculated'] == 5000)
 
 # We can filter using the boolean column as value
-df[(df['stock'] < 20000)]
+df[~(df['calculated'] == 5000)]
 
 # Register UDF (pa.array -> pa.array)
 db.register_udf('power', lambda arr: pa.array(arr.to_numpy() ** 2))

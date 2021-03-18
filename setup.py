@@ -8,7 +8,7 @@ __version__ = "0.0.1"
 extensions = [
     Extension(
         name="cjoin", 
-        sources=["wombat/ops/cjoin.c"], 
+        sources=["wombat_db/ops/cjoin.c"], 
         include_dirs=[np.get_include()]
     )
 ]
@@ -28,7 +28,7 @@ class build(build_orig):
                                                   language_level=3)
 
 setup(
-    name='wombat',
+    name='wombat_db',
     version=__version__,
     description='Useful data crunching tools for pyarrow',
     long_description_content_type="text/markdown",
@@ -39,7 +39,7 @@ setup(
     author_email='tom@youngbulls.nl ',
     keywords=['arrow', 'pyarrow', 'data'],
     url='https://github.com/TomScheffers/wombat',
-    download_url='https://pypi.org/project/wombat/',
+    download_url='https://pypi.org/project/wombat-db/',
     include_package_data=True,
     ext_modules=extensions,
     install_requires=["numpy", "pyarrow"],

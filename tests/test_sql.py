@@ -1,4 +1,4 @@
-from wombat import Engine, head
+from wombat_db import Engine, head
 import pyarrow.parquet as pq
 
 # Avoid initial take() time

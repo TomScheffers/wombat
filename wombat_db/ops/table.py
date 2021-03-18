@@ -1,5 +1,5 @@
 import pyarrow as pa
-from wombat.ops import join, filters, groupby, drop_duplicates, head
+from wombat_db.ops import join, filters, groupby, drop_duplicates, head
 
 # Table wrapper: does not work because pa.Table.from_pandas/from_arrays/from_pydict always returns pa.Table
 class Table(pa.Table):

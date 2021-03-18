@@ -1,5 +1,5 @@
 import pyarrow as pa 
-from wombat import TableCleaner, head
+from wombat_db import TableCleaner, head
 
 # Training data
 t1 = pa.Table.from_pydict({

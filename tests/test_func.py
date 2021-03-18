@@ -1,5 +1,5 @@
 import pyarrow as pa 
-from wombat import join, filters, groupby, head, drop_duplicates
+from wombat_db import join, filters, groupby, head, drop_duplicates
 
 # Create data
 t = pa.Table.from_pydict({

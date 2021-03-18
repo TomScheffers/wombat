@@ -1,4 +1,4 @@
-from wombat import Engine, head
+from wombat_db import Engine, head
 import pyarrow as pa
 import pyarrow.parquet as pq
 

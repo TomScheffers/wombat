@@ -1,6 +1,6 @@
 import pyarrow as pa
 import numpy as np
-from wombat.ops import join, groupby, filters
+from wombat_db.ops import join, groupby, filters
 import hashlib, json, time
 
 # Computation nodes

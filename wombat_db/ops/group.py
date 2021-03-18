@@ -1,6 +1,6 @@
 import numpy as np
 import pyarrow as pa
-from wombat.ops.helpers import combine_column, columns_to_array, groupify_array
+from wombat_db.ops.helpers import combine_column, columns_to_array, groupify_array
 
 # Grouping / groupby methods
 agg_methods = {

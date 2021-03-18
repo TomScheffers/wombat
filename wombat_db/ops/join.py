@@ -1,7 +1,7 @@
 import time
 import numpy as np
 import pyarrow as pa
-from wombat.ops.helpers import columns_to_array, groupify_array
+from wombat_db.ops.helpers import columns_to_array, groupify_array
 from cjoin import inner_join
 
 def align_tables(t1, t2, l1, l2):

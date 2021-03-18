@@ -1,5 +1,5 @@
-from wombat.engine.nodes import *
-from wombat.engine.sql import parse_sql
+from wombat_db.engine.nodes import *
+from wombat_db.engine.sql import parse_sql
 
 # Computation plan (of multiple nodes)
 class Plan():
