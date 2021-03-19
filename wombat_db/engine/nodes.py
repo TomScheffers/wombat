@@ -1,15 +1,16 @@
 import pyarrow as pa
 import numpy as np
 from wombat_db.ops import join, groupby, filters
+from wombat_db.engine.column import ColumnNode
 import hashlib, json, time
 
 # Computation nodes
 class BaseNode():
     def check(self):
-        assert all(c in self.columns_available for c in self.columns_forward)
+        assert all(c in parent.columns for c in self.columns)
 
     def columns_bw(self, columns_backward):
-        self.columns_backward = [c for c in sorted(list(set(self.columns_forward + columns_backward))) if c in self.columns_available]
+        self.columns_backward = [c for c in sorted(list(set(self.columns_forward + columns_backward))) if c in self.columns_source]
         return self.columns_backward
 
     def properties(self):
@@ -31,8 +32,7 @@ class BaseNode():
 
     def backward(self, columns_backward=[], filters_backward=[]):
         self.columns_bw(columns_backward)
-        filters = list(set(self.filters_forward + filters_backward))
-        hp = self.parent.backward(columns_backward=self.columns_backward, filters_backward=filters)
+        hp = self.parent.backward(columns_backward=self.columns_backward, filters_backward=filters_backward)
         return self.hash(h=hp)
 
     def get(self, verbose):
@@ -55,14 +55,15 @@ class TableNode(BaseNode):
         self.table, self.database, self.cache_obj = table, database, cache_obj
         self.cache = (cache_obj != None)
         self.table = self.database.tables[table]
+        self.columns = self.table.column_names
+        self.columns += list(set([c.split('.')[0] for c in self.columns if '.' in c]))
 
         # Forward propagation of nodes
-        columns = self.table.column_names
-        self.columns_available, self.columns_forward, self.filters_forward = columns + list(set([c.split('.')[0] for c in columns if '.' in c])), [], []
+        self.columns_source, self.columns_forward, self.filters_forward = self.columns, [], []
 
     def backward(self, columns_backward=[], filters_backward=[]):
         self.columns_bw(columns_backward)
-        self.filters = list(set(self.filters_forward + self.filters_backward))
+        self.filters = self.filters_backward
         return self.hash()
 
     def fetch(self, verbose):
@@ -105,19 +106,20 @@ class DatasetNode(BaseNode):
         self.partition_keys = [p.name for p in self.dataset.partitions]
         self.partition_values = [{pk[0]: dp.keys[pk[1]] for pk, dp in zip(p.partition_keys, self.dataset.partitions)} for p in self.dataset.pieces]
         self.meta = self.dataset.pieces[0].get_metadata()
+        self.columns = self.partition_keys + [c['path_in_schema'] for c in self.meta.row_group(0).to_dict()['columns']]
+        self.columns += list(set([c.split('.')[0] for c in self.columns if '.' in c]))
 
         # Forward propagation of nodes
-        columns = self.partition_keys + [c['path_in_schema'] for c in self.meta.row_group(0).to_dict()['columns']]
-        self.columns_available, self.columns_forward, self.filters_forward = columns + list(set([c.split('.')[0] for c in columns if '.' in c])), [], []
+        self.columns_source, self.columns_forward, self.filters_forward = self.columns, [], []
 
     def backward(self, columns_backward=[], filters_backward=[]):
         self.columns_bw(columns_backward)
-        self.filters = list(set(self.filters_forward + filters_backward))
+        self.filters = filters_backward
         self.part_filters = list(filter(lambda f: f[0] in self.partition_keys, self.filters))
         self.value_filters = list(filter(lambda f: f[0] not in self.partition_keys, self.filters))
         return self.hash()
 
-    def check(self, partition_value, filters):
+    def partition_check(self, partition_value, filters):
         for key, op, value in filters:
             if not part_check(partition_value[key], op, value):
                 return False
@@ -126,7 +128,7 @@ class DatasetNode(BaseNode):
     def fetch(self, verbose):
         ts = []
         for i, p in enumerate(self.dataset.pieces):
-            if self.check(self.partition_values[i], self.part_filters):
+            if self.partition_check(self.partition_values[i], self.part_filters):
                 ts.append(p.read(columns=[c for c in self.columns_backward if c not in self.partition_keys], partitions=self.dataset.partitions))
         t = pa.concat_tables(ts)
         return (filters(t, self.value_filters) if self.value_filters else t)
@@ -145,16 +147,19 @@ class JoinNode(BaseNode):
         self.left, self.right, self.on, self.cache_obj = left, right, (on if isinstance(on, list) else [on]), cache_obj
         self.cache = (cache_obj != None)
 
+        # Check columns
+        assert all(c in left.columns + right.columns for c in self.on)
+        self.columns = list(set(left.columns + right.columns))
+
         # Forward propagation of nodes
-        self.columns_available, self.columns_forward = list(set(left.columns_available + right.columns_available)), list(set(left.columns_forward + right.columns_forward + on))
-        self.filters_forward = list(set(left.filters_forward + right.filters_forward)) #[f for f in left.filters_forward + right.filters_forward if f[0] in self.on]
-        self.check()
+        self.columns_source, self.columns_forward = list(set(left.columns_source + right.columns_source)), list(set(left.columns_forward + right.columns_forward + on))
+        self.filters_forward = left.filters_forward + right.filters_forward #[f for f in left.filters_forward + right.filters_forward if f[0] in self.on]
 
     def backward(self, columns_backward=[], filters_backward=[]):
         self.columns_bw(columns_backward)
-        self.filters = list(set(self.filters_forward + filters_backward))
-        filters_l, filters_r = [f for f in self.filters if f[0] in self.left.columns_available], [f for f in self.filters if f[0] in self.right.columns_available]
-        columns_l, columns_r = [c for c in self.columns_backward if c in self.left.columns_available], [c for c in self.columns_backward if c in self.right.columns_available]
+        self.filters = filters_backward
+        filters_l, filters_r = [f for f in self.filters if f[0] in self.left.columns_source], [f for f in self.filters if f[0] in self.right.columns_source]
+        columns_l, columns_r = [c for c in self.columns_backward if c in self.left.columns_source], [c for c in self.columns_backward if c in self.right.columns_source]
         hl = self.left.backward(columns_backward=columns_l, filters_backward=filters_l)
         hr = self.right.backward(columns_backward=columns_r, filters_backward=filters_r)
         hl.update(hr.digest())
@@ -184,15 +189,17 @@ class FilterNode(BaseNode):
         self.parent, self.filters, self.cache_obj = parent, ([filters] if isinstance(filters, tuple) else filters), cache_obj
         self.cache = (cache_obj != None)
 
+        # Check if columns are available
+        assert all(f[0] in parent.columns for f in self.filters)
+        self.columns = parent.columns
+
         # Forward propagation of nodes
-        self.columns_available, self.columns_forward = parent.columns_available, list(set(parent.columns_forward + [f[0] for f in self.filters]))
-        self.filters_forward = list(set(parent.filters_forward + self.filters))
-        self.check()
+        self.columns_source, self.columns_forward = parent.columns_source, list(set(parent.columns_forward + [f[0] for f in self.filters if f[0] in parent.columns_source]))
+        self.filters_forward = parent.filters_forward + self.filters
 
     def backward(self, columns_backward=[], filters_backward=[]):
         self.columns_bw(columns_backward)
-        filters = list(set(self.filters_forward + filters_backward))
-        hp = self.parent.backward(columns_backward=self.columns_backward, filters_backward=filters)
+        hp = self.parent.backward(columns_backward=self.columns_backward, filters_backward=filters_backward)
         self.hash_key = hp.hexdigest() # Filter node does not change anything, so can just pass its parents hash
         return hp
 
@@ -204,15 +211,18 @@ class AggregateNode(BaseNode):
         self.parent, self.by, self.methods, self.filters, self.cache_obj = parent, (by if isinstance(by, list) else [by]), methods, [], cache_obj
         self.cache = (cache_obj != None)
 
+        # Check if columns are available
+        refs = [(m[0] if isinstance(m, tuple) else k) for k, m in methods.items()]
+        assert all(c in parent.columns for c in self.by + refs)
+        self.columns = self.by + list(methods.keys())
+
         # Forward propagation of nodes
-        self.columns_available, self.columns_forward, self.filters_forward = parent.columns_available, list(set(parent.columns_forward + self.by + list(self.methods.keys()))), parent.filters_forward
-        self.check()
-    
+        self.columns_source, self.columns_forward, self.filters_forward = parent.columns_source, list(set(parent.columns_forward + [c for c in self.by + refs if c in parent.columns_source])), parent.filters_forward
+
     def backward(self, columns_backward=[], filters_backward=[]):
         self.columns_bw(columns_backward)
-        filters = list(set(self.filters_forward + filters_backward))
-        self.filters = [f for f in filters if f[0] in self.methods.keys()] # Intercept filters which are aggregate values
-        hp = self.parent.backward(columns_backward=self.columns_backward, filters_backward=[f for f in filters if f not in self.filters])
+        self.filters = [f for f in filters_backward if f[0] in self.methods.keys()] # Intercept filters which are aggregate values
+        hp = self.parent.backward(columns_backward=self.columns_backward, filters_backward=[f for f in filters_backward if f not in self.filters])
         return self.hash(h=hp)
 
     def fetch(self, verbose):
@@ -224,11 +234,14 @@ class OrderNode(BaseNode):
     def __init__(self, parent, key, ascending, cache_obj=None):
         self.parent, self.key, self.ascending, self.cache_obj = parent, key, ascending, cache_obj
         self.cache = (cache_obj != None)
+
+        # Check if columns are available
+        assert all(c in parent.columns for c in [key])  
+        self.columns = parent.columns   
     
         # Forward propagation of nodes
-        self.columns_available, self.columns_forward, self.filters_forward = parent.columns_available, list(set(parent.columns_forward + [self.key])), parent.filters_forward
-        self.check()
-    
+        self.columns_source, self.columns_forward, self.filters_forward = parent.columns_source, list(set(parent.columns_forward + ([self.key] if self.key in parent.columns_source else []))), parent.filters_forward
+
     def fetch(self, verbose):
         tp = self.parent.get(verbose)
         idxs = pa.compute.sort_indices(tp.column(self.key)).to_numpy()
@@ -238,12 +251,16 @@ class SelectionNode(BaseNode):
     def __init__(self, parent, columns, aliases=[], cache_obj=None):
         self.parent, self.columns, self.aliases, self.cache_obj = parent, columns, aliases, cache_obj
         self.cache = (cache_obj != None)
+        self.mapping = (dict(zip(columns, aliases)) if aliases else {}) 
+
+        # Check if columns are available
+        assert all(c in parent.columns for c in columns) 
+        if aliases: 
+            self.columns = [self.mapping.get(c, c) for c in parent.columns]
 
         # Forward propagation of nodes
-        self.mapping = (dict(zip(columns, aliases)) if aliases else {}) 
-        self.columns_available, self.columns_forward, self.filters_forward = parent.columns_available + columns + aliases, list(set(parent.columns_forward + columns)), parent.filters_forward
-        self.check()
-
+        self.columns_source, self.columns_forward, self.filters_forward = parent.columns_source, list(set(parent.columns_forward + [c for c in columns if c in parent.columns_source])), parent.filters_forward
+        
     def fetch(self, verbose):
         tp = self.parent.get(verbose)
         if self.aliases:
@@ -251,191 +268,73 @@ class SelectionNode(BaseNode):
         else:
             return tp.select(self.columns)
 
-# Numerical & logical operations 
-class ColumnNode(BaseNode):
-    def __init__(self, key, required, func=None, depth=0, boolean=False):
-        self.key, self.required, self.depth, self.boolean = key, required, depth, boolean
-        self.f = (lambda t: t[self.key] if not func else func)
-
-    def get(self, t):
-        f = self.f
-        for _ in range(self.depth):
-            f = self.f(t)
-        return f(t)
-
-    def __getitem__(self, key):
-        keyn = self.key + '[' + str(key) + ']'
-        if isinstance(key, str):
-            f = lambda t: self.get(t).combine_chunks().field(key) # Reference to a Struct Column
-        else:
-            raise Exception("__getitem__ currently only defined for struct fields")
-        return ColumnNode(key=keyn, required=[r + '.' + key for r in self.required], func=f, depth=self.depth + 1)
-
-    def breed(self, op, other_key, f, required=[], boolean=False):
-        key = '(' + self.key + op + other_key + ')'
-        return ColumnNode(key=key, required=self.required + required, func=f, depth=self.depth + 1, boolean=boolean)
-
-    def __add__(self, other):
-        if isinstance(other, self.__class__):
-            f = lambda t: pa.compute.add(self.get(t), other.get(t))
-            return self.breed('+', other.key, f, required=other.required)
-        else:
-            f = lambda t: pa.compute.add(self.get(t), pa.scalar(other))
-            return self.breed('+', str(other), f)
-
-    def __sub__(self, other):
-        if isinstance(other, self.__class__):
-            f = lambda t: pa.compute.subtract(self.get(t), other.get(t))
-            return self.breed('-', other.key, f, required=other.required)
-        else:
-            f = lambda t: pa.compute.subtract(self.get(t), pa.scalar(other))
-            return self.breed('-', str(other), f)
-
-    def __mul__(self, other):
-        if isinstance(other, self.__class__):
-            f = lambda t: pa.compute.multiply(self.get(t), other.get(t))
-            return self.breed('*', other.key, f, required=other.required)
-        else:
-            f = lambda t: pa.compute.multiply(self.get(t), pa.scalar(other))
-            return self.breed('*', str(other), f)
-
-    def __truediv__(self, other):
-        if isinstance(other, self.__class__):
-            f = lambda t: pa.compute.divide(self.get(t), other.get(t))
-            return self.breed('/', other.key, f, required=other.required)
-        else:
-            f = lambda t: pa.compute.divide(self.get(t), pa.scalar(other))
-            return self.breed('/', str(other), f)
-
-    def __pow__(self, other):
-        if isinstance(other, self.__class__):
-            f = lambda t: pa.array(np.power(self.get(t).to_numpy(), other.get(t).to_numpy()))
-            return self.breed('**', other.key, f, required=other.required)
-        else:
-            f = lambda t: pa.array(np.power(self.get(t), other))
-            return self.breed('**', str(other), f)
-    
-    def __lt__(self, other):
-        if isinstance(other, self.__class__):
-            f = lambda t: pa.compute.less(self.get(t), other.get(t))
-            return self.breed('<', other.key, f, required=other.required, boolean=True)
-        else:
-            f = lambda t: pa.compute.less(self.get(t), pa.scalar(other))
-            return self.breed('<', str(other), f, boolean=True)
-
-    def __le__(self, other):
-        if isinstance(other, self.__class__):
-            f = lambda t: pa.compute.less_equal(self.get(t), other.get(t))
-            return self.breed('<', other.key, f, required=other.required, boolean=True)
-        else:
-            f = lambda t: pa.compute.less_equal(self.get(t), pa.scalar(other))
-            return self.breed('<', str(other), f, boolean=True)
-
-    def __gt__(self, other):
-        if isinstance(other, self.__class__):
-            f = lambda t: pa.compute.greater(self.get(t), other.get(t))
-            return self.breed('>', other.key, f, required=other.required, boolean=True)
-        else:
-            f = lambda t: pa.compute.greater(self.get(t), pa.scalar(other))
-            return self.breed('>', str(other), f, boolean=True)
-
-    def __ge__(self, other):
-        if isinstance(other, self.__class__):
-            f = lambda t: pa.compute.greater_equal(self.get(t), other.get(t))
-            return self.breed('>=', other.key, f, required=other.required, boolean=True)
-        else:
-            f = lambda t: pa.compute.greater_equal(self.get(t), pa.scalar(other))
-            return self.breed('>=', str(other), f, boolean=True)
-
-    def __eq__(self, other):
-        if isinstance(other, self.__class__):
-            f = lambda t: pa.compute.equal(self.get(t), other.get(t))
-            return self.breed('=', other.key, f, required=other.required, boolean=True)
-        else:
-            f = lambda t: pa.compute.equal(self.get(t), pa.scalar(other))
-            return self.breed('=', str(other), f, boolean=True)
-
-    def __ne__(self, other):
-        if isinstance(other, self.__class__):
-            f = lambda t: pa.compute.not_equal(self.get(t), other.get(t))
-            return self.breed('!=', other.key, f, required=other.required, boolean=True)
-        else:
-            f = lambda t: pa.compute.not_equal(self.get(t), pa.scalar(other))
-            return self.breed('!=', str(other), f, boolean=True)
-
-    def __invert__(self):
-        f = lambda t: pa.compute.invert(self.get(t))
-        return ColumnNode(key='~' + self.key, required=self.required, func=f, depth=self.depth + 1, boolean=True)
-
-    def greatest(self, other):
-        if isinstance(other, self.__class__):
-            f = lambda t: pa.array(np.maximum(self.get(t).to_numpy(), other.get(t).to_numpy()))
-            return ColumnNode(key='greatest({}, {})'.format(self.key, other.key), required=self.required + other.required, func=f, depth=self.depth + 1)
-        else:
-            f = lambda t: pa.array(np.maximum(self.get(t).to_numpy(), other))
-            return ColumnNode(key='greatest({}, {})'.format(self.key, other), required=self.required, func=f, depth=self.depth + 1)
-
-    def least(self, other):
-        if isinstance(other, self.__class__):
-            f = lambda t: pa.array(np.minimum(self.get(t).to_numpy(), other.get(t).to_numpy()))
-            return ColumnNode(key='least({}, {})'.format(self.key, other.key), required=self.required + other.required, func=f, depth=self.depth + 1)
-        else:
-            f = lambda t: pa.array(np.minimum(self.get(t).to_numpy(), other))
-            return ColumnNode(key='least({}, {})'.format(self.key, other), required=self.required, func=f, depth=self.depth + 1)
-
-    def clip(self, a_min=None, a_max=None):
-        f = lambda t: pa.array(np.clip(self.get(t).to_numpy(), a_min, a_max))
-        return ColumnNode(key=self.key + '.clip({}, {})'.format(a_min, a_max), required=self.required, func=f, depth=self.depth + 1)
-
-    def fillna(self, value):
-        f = lambda t: pa.compute.fill_null(self.get(t), pa.scalar(other))
-        return ColumnNode(key='{}.fillna({})'.format(self.key, other), required=self.required, func=f, depth=self.depth + 1)
-
-    def coalesce(self, other):
-        if isinstance(other, self.__class__):
-            f = lambda t: pa.array(np.where(np.isnan(self.get(t)), other.get(t), self.get(t)))
-            return ColumnNode(key='coalesce({}, {})'.format(self.key, other.key), required=self.required + other.required, func=f, depth=self.depth + 1)
-        else:
-            f = lambda t: pa.compute.fill_null(self.get(t), pa.scalar(other))
-            return ColumnNode(key='coalesce({}, {})'.format(self.key, other), required=self.required, func=f, depth=self.depth + 1)
-
-    @classmethod
-    def udf(cls, name, function, arguments):
-        if isinstance(arguments, dict):
-            f = lambda t: function(**{k: (v.get(t) if isinstance(v, ColumnNode) else v) for k,v in arguments.items()})
-            keys = ', '.join([(v.key if isinstance(v, ColumnNode) else str(v)) for v in arguments.values()])
-            depth = max([0] + [v.depth for v in arguments.values() if isinstance(v, ColumnNode)]) + 1
-            required = list(set([r for v in arguments.values() if isinstance(v, ColumnNode) for r in v.required]))
-        else:
-            if isinstance(arguments, ColumnNode):
-                f = lambda t: function(arguments.get(t))
-                keys, depth, required = arguments.key, arguments.depth + 1, arguments.required
-            else:
-                f = lambda t: function(arguments)
-                keys, depth, required = str(arguments), 0, []
-        return cls(key=name + '(' + keys + ')', required=required, func=f, depth=depth)
-
 class CalculationNode(BaseNode):
     def __init__(self, parent, key, column, cache_obj=None):
         self.parent, self.key, self.calculation, self.column, self.cache_obj = parent, key, column.key, column, cache_obj
         self.cache = (cache_obj != None)
+
+        # Check if columns are available
+        assert all(c in parent.columns for c in column.required)  
+        self.columns = parent.columns + [key]
     
         # Forward propagation of nodes
-        self.columns_available, self.columns_forward, self.filters_forward = parent.columns_available + [key], parent.columns_forward + column.required, parent.filters_forward
-        self.check()
+        self.columns_source, self.columns_forward, self.filters_forward = parent.columns_source, list(set(parent.columns_forward + [c for c in column.required if c in parent.columns_source])), parent.filters_forward
     
+    def backward(self, columns_backward=[], filters_backward=[]):
+        self.columns_bw(columns_backward)
+        self.filters = [f for f in filters_backward if f[0] == self.key] # Intercept filters which are calculated values
+        hp = self.parent.backward(columns_backward=self.columns_backward, filters_backward=[f for f in filters_backward if f not in self.filters])
+        return self.hash(h=hp)
+
     def fetch(self, verbose):
         tp = self.parent.get(verbose)
         t = tp.append_column(self.key, self.column.get(tp))
-        return t
+        return (filters(t, self.filters) if self.filters else t)
 
 class BooleanMaskNode(BaseNode):
     def __init__(self, parent, mask, cache_obj=None):
         self.parent, self.mask, self.cache_obj = parent, mask, cache_obj
         self.cache = (cache_obj != None)
-        self.columns_available, self.columns_forward, self.filters_forward = parent.columns_available, parent.columns_forward, parent.filters_forward
+        self.columns = parent.columns
+        self.columns_source, self.columns_forward, self.filters_forward = parent.columns_source, parent.columns_forward, parent.filters_forward
     
     def fetch(self, verbose):
         tp = self.parent.get(verbose)
         t = tp.filter(self.mask.get(tp))
+        return t
+
+class FillNanNode(BaseNode):
+    def __init__(self, parent, columns, value, cache_obj=None):
+        self.parent, self.nan_columns, self.value, self.cache_obj = parent, columns, value, cache_obj
+        self.cache = (cache_obj != None)
+        assert all(c in parent.columns for c in self.nan_columns) 
+        self.columns = parent.columns
+
+        # Forward propagation of nodes
+        self.columns_source, self.columns_forward, self.filters_forward = parent.columns_source, list(set(parent.columns_forward + [c for c in self.nan_columns if c in parent.columns_source])), parent.filters_forward
+    
+    def fetch(self, verbose):
+        t = self.parent.get(verbose)
+        for c in self.nan_columns:
+            arr = pa.compute.fill_null(t.column(c).combine_chunks(), pa.scalar(self.value))
+            t = t.drop([c])
+            t = t.append_column(c, arr)
+        return t
+
+class CastNode(BaseNode):
+    def __init__(self, parent, dtypes, cache_obj=None):
+        self.parent, self.dtypes, self.cache_obj = parent, dtypes, cache_obj
+        self.cache = (cache_obj != None)
+        assert all(c in parent.columns for c in dtypes.keys()) 
+        self.columns = parent.columns
+
+        # Forward propagation of nodes
+        self.columns_source, self.columns_forward, self.filters_forward = parent.columns_source, list(set(parent.columns_forward + [c for c in list(dtypes.keys()) if c in parent.columns_source])), parent.filters_forward
+    
+    def fetch(self, verbose):
+        t = self.parent.get(verbose)
+        for c, tp in self.dtypes.items():
+            arr = pa.array(t.column(c).to_numpy().astype(tp))
+            t = t.drop([c])
+            t = t.append_column(c, arr)
         return t

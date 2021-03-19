@@ -3,7 +3,7 @@ from setuptools import Extension
 from distutils.command.build import build as build_orig
 import numpy as np
 
-__version__ = "0.0.1"
+__version__ = "0.0.4"
 
 extensions = [
     Extension(
@@ -37,14 +37,14 @@ setup(
     packages=find_packages(),
     author='Tom Scheffers',
     author_email='tom@youngbulls.nl ',
-    keywords=['arrow', 'pyarrow', 'data'],
+    keywords=['arrow', 'pyarrow', 'data', 'sql', 'dataframe'],
     url='https://github.com/TomScheffers/wombat',
     download_url='https://pypi.org/project/wombat-db/',
     include_package_data=True,
     ext_modules=extensions,
-    install_requires=["numpy", "pyarrow"],
-    zip_safe=False,
     
+    # install_requires=["numpy", "pyarrow"],
+    # zip_safe=False,
     # setup_requires=["numpy"],
     # package_data={"wombat": ["wombat/ops/cjoin.pyx"]},
     # cmdclass={"build": build},

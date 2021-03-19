@@ -8,7 +8,12 @@ agg_methods = {
     'max': np.max,
     'min': np.min,
     'mean': np.mean,
-    'median': np.median
+    'median': np.median,
+    'count': np.size,
+    'distinct_count': lambda a: np.unique(a).size,
+    'prod': np.prod,
+    'std': np.std,
+    'var': np.var,
 }
 def add_agg_method(self, name, method):
     def f(agg_columns=[]):
@@ -39,16 +44,16 @@ class Grouping():
     def aggregate(self, methods):
         # Create index columns
         table = self.table.select(self.columns).take(self.sort_idxs[self.bgn_idxs])
-
-        data = {k: self.table.column(k).to_numpy() for k in methods.keys()}
-        for col, f in methods.items():
+        self.refs = list(set(c for c, _ in methods.values()))
+        data = {k: self.table.column(k).to_numpy() for k in self.refs}
+        for col, (ref, f) in methods.items():
             vf = np.vectorize(f, otypes=[object])
-            agg_arr = vf(np.split(data[col][self.sort_idxs], self.bgn_idxs[1:]))
+            agg_arr = vf(np.split(data[ref][self.sort_idxs], self.bgn_idxs[1:]))
             table = table.append_column(col, pa.array(agg_arr))
         return table
 
     def agg(self, methods):
-        methods = {col: agg_methods[m] for col, m in methods.items()}
+        methods = {col: ((m[0], agg_methods[m[1]]) if isinstance(m, tuple) else (col, agg_methods[m])) for col, m in methods.items()}
         return self.aggregate(methods=methods)
 
 def groupby(table, by):

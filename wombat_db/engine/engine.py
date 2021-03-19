@@ -1,5 +1,6 @@
 from wombat_db.engine.nodes import *
 from wombat_db.engine.sql import parse_sql
+from wombat_db.engine.column import ColumnNode
 
 # Computation plan (of multiple nodes)
 class Plan():
@@ -12,7 +13,7 @@ class Plan():
                 self.last = BooleanMaskNode(self.last, key, self.cache_obj)
             else:
                 raise Exception('Column must be boolean to be used in selection')
-        elif key in self.last.columns_available:
+        elif key in self.last.columns:
             return ColumnNode(key, required=[key])
         else:
             raise Exception("{} not a valid column reference")
@@ -24,6 +25,8 @@ class Plan():
             raise Exception("Value must be a column node reference")
 
     def collect(self, verbose=False):
+        if verbose:
+            print("Columns:", ", ".join(self.last.columns_forward))
         self.last.backward(columns_backward=self.last.columns_forward, filters_backward=self.last.filters_forward)
         return self.last.get(verbose)
 
@@ -56,6 +59,11 @@ class Plan():
         return self
 
     def fillna(self, columns, value):
+        self.last = FillNanNode(self.last, columns, value, cache_obj=self.cache_obj)
+        return self
+
+    def cast(self, dtypes):
+        self.last = CastNode(self.last, dtypes, cache_obj=self.cache_obj)
         return self
 
     def udf(self, name, arguments):

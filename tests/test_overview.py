@@ -13,11 +13,12 @@ db = Engine(cache_memory=1e9)
 db.register_dataset('overview', d1)
 
 # Look at properties
-df = db['overview'].filter(('org_key', '=', 2))
+df = db['overview']
+df.filter(('org_key', '=', 2))
 df.fillna(['stock', 'stock_extra', 'potential_n5w', 'stock_goal', 'projection_n5w'], 0)
 
 # Acces struct element
-df['dimension'] = df['properties']['BK_Article']
+df['dimension'] = df['properties']['ColorCode']
 
 # Aggregate
 df.aggregate(
@@ -28,8 +29,12 @@ df.aggregate(
         'potential_n5w': 'sum',
         'stock_goal': 'sum',
         'projection_n5w': 'sum',
+        'projection_n5w_max': ('projection_n5w', 'max'),
+        'skus': ('stock', 'count'),
+        'options': ('option_key', 'distinct_count'),
     }
 )
+df.cast({'projection_n5w': int, 'potential_n5w': int})
 df.filter(('stock_extra', '>', 100))
 
 df.orderby('stock', ascending=False)
