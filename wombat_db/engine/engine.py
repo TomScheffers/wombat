@@ -50,8 +50,12 @@ class Plan():
         self.last = SelectionNode(self.last, list(mapping.keys()), aliases=list(mapping.values()), cache_obj=self.cache_obj)
         return self
 
-    def select(self, columns):
+    def select(self, columns=[]):
         self.last = SelectionNode(self.last, columns, cache_obj=self.cache_obj)
+        return self
+
+    def drop(self, columns=[]):
+        self.last = DropNode(self.last, columns, cache_obj=self.cache_obj)
         return self
 
     def orderby(self, key, ascending=True):

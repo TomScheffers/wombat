@@ -25,6 +25,7 @@ class ColumnNode():
         key = '(' + self.key + op + other_key + ')'
         return self.__class__(key=key, required=self.required + required, func=f, depth=self.depth + 1, boolean=boolean)
 
+    # Numerical
     def __add__(self, other):
         if isinstance(other, self.__class__):
             f = lambda t: pa.compute.add(self.get(t), other.get(t))
@@ -65,6 +66,7 @@ class ColumnNode():
             f = lambda t: pa.array(np.power(self.get(t), other))
             return self.breed('**', str(other), f)
     
+    # Comparison operations
     def __lt__(self, other):
         if isinstance(other, self.__class__):
             f = lambda t: pa.compute.less(self.get(t), other.get(t))
@@ -113,10 +115,45 @@ class ColumnNode():
             f = lambda t: pa.compute.not_equal(self.get(t), pa.scalar(other))
             return self.breed('!=', str(other), f, boolean=True)
 
+    # Logical operators
     def __invert__(self):
         f = lambda t: pa.compute.invert(self.get(t))
         return ColumnNode(key='~' + self.key, required=self.required, func=f, depth=self.depth + 1, boolean=True)
 
+    def __and__(self, other):
+        f = lambda t: pa.compute.and_(self.get(t), other.get(t))
+        return self.breed('&', other.key, f, required=other.required, boolean=True)
+
+    def __or__(self, other):
+        f = lambda t: pa.compute.or_(self.get(t), other.get(t))
+        return self.breed('|', other.key, f, required=other.required, boolean=True)
+
+    def __xor__(self, other):
+        f = lambda t: pa.compute.xor(self.get(t), other.get(t))
+        return self.breed('^', other.key, f, required=other.required, boolean=True)
+
+    # Rounding based
+    def round(self, decimals=0):
+        f = lambda t: pa.array(np.round(self.get(t).to_numpy(), decimals=decimals))
+        return ColumnNode(key='round({}, {})'.format(self.key, decimals), required=self.required, func=f, depth=self.depth + 1)
+
+    def ceil(self):
+        f = lambda t: pa.array(np.ceil(self.get(t).to_numpy()))
+        return ColumnNode(key='ceil({})'.format(self.key), required=self.required, func=f, depth=self.depth + 1)
+
+    def floor(self):
+        f = lambda t: pa.array(np.floor(self.get(t).to_numpy()))
+        return ColumnNode(key='floor({})'.format(self.key), required=self.required, func=f, depth=self.depth + 1)
+
+    # Casting
+    def astype(self, dtype):
+        f = lambda t: pa.array(self.get(t).to_numpy().astype(dtype))
+        return ColumnNode(key='cast({} as {})'.format(self.key, dtype), required=self.required, func=f, depth=self.depth + 1)
+    
+    def cast(self, dtype):
+        return self.astype(dtype)
+
+    # SQL based
     def greatest(self, other):
         if isinstance(other, self.__class__):
             f = lambda t: pa.array(np.maximum(self.get(t).to_numpy(), other.get(t).to_numpy()))
@@ -149,6 +186,7 @@ class ColumnNode():
             f = lambda t: pa.compute.fill_null(self.get(t), pa.scalar(other))
             return ColumnNode(key='coalesce({}, {})'.format(self.key, other), required=self.required, func=f, depth=self.depth + 1)
 
+    # UDFs
     @classmethod
     def udf(cls, name, function, arguments):
         if isinstance(arguments, dict):

@@ -34,7 +34,7 @@ df['stock'] = df['economical'].coalesce(0).least(df['technical']).greatest(0)
 
 # A column reference can be used for numerical & logical operations
 df['calculated'] = ((df['stock'] - 100) ** 2 / 5000 - df['stock']).clip(None, 5000)
-df['check'] = ~(df['calculated'] == 5000)
+df['check'] = ~(df['calculated'] == 5000) and (df['stock'] > 10000)
 
 # We can filter using the boolean column as value
 df[(df['stock'] < 20000)]
@@ -51,11 +51,12 @@ df.rename({
     'technical': 'technical_max'
 })
 
-# Select columns
-df.select(['option_key', 'economical_sum', 'calculated', 'check', 'economical ** 2'])
+# Select columns (defaults to all available) & drop one column
+df.select()
+df.drop('economical_sum')
 
 # You do not need to catch the return for chaining of operations
-df.orderby('calculated', ascending=False)
+df.orderby('abc', ascending=False)
 
 # Collect is used to execute the plan
 r = df.collect()

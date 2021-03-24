@@ -6,8 +6,10 @@ import hashlib, json, time
 
 # Computation nodes
 class BaseNode():
-    def check(self):
-        assert all(c in parent.columns for c in self.columns)
+    def check(self, needed, reference):
+        missing = [c for c in needed if c not in reference]
+        if missing:
+            raise Exception("Required columns ({}) not in available columns ({})".format(", ".join(missing), ", ".join(reference)))
 
     def columns_bw(self, columns_backward):
         self.columns_backward = [c for c in sorted(list(set(self.columns_forward + columns_backward))) if c in self.columns_source]
@@ -148,7 +150,8 @@ class JoinNode(BaseNode):
         self.cache = (cache_obj != None)
 
         # Check columns
-        assert all(c in left.columns + right.columns for c in self.on)
+        self.check(needed=self.on, reference=left.columns)
+        self.check(needed=self.on, reference=right.columns)
         self.columns = list(set(left.columns + right.columns))
 
         # Forward propagation of nodes
@@ -190,7 +193,7 @@ class FilterNode(BaseNode):
         self.cache = (cache_obj != None)
 
         # Check if columns are available
-        assert all(f[0] in parent.columns for f in self.filters)
+        self.check(needed=[f[0] for f in self.filters], reference=parent.columns)
         self.columns = parent.columns
 
         # Forward propagation of nodes
@@ -213,7 +216,7 @@ class AggregateNode(BaseNode):
 
         # Check if columns are available
         refs = [(m[0] if isinstance(m, tuple) else k) for k, m in methods.items()]
-        assert all(c in parent.columns for c in self.by + refs)
+        self.check(needed=self.by + refs, reference=parent.columns)
         self.columns = self.by + list(methods.keys())
 
         # Forward propagation of nodes
@@ -236,8 +239,8 @@ class OrderNode(BaseNode):
         self.cache = (cache_obj != None)
 
         # Check if columns are available
-        assert all(c in parent.columns for c in [key])  
-        self.columns = parent.columns   
+        self.check(needed=[key], reference=parent.columns)
+        self.columns = parent.columns 
     
         # Forward propagation of nodes
         self.columns_source, self.columns_forward, self.filters_forward = parent.columns_source, list(set(parent.columns_forward + ([self.key] if self.key in parent.columns_source else []))), parent.filters_forward
@@ -248,13 +251,15 @@ class OrderNode(BaseNode):
         return (tp.take(idxs) if self.ascending else tp.take(idxs[::-1]))
 
 class SelectionNode(BaseNode):
-    def __init__(self, parent, columns, aliases=[], cache_obj=None):
+    def __init__(self, parent, columns=[], aliases=[], cache_obj=None):
         self.parent, self.columns, self.aliases, self.cache_obj = parent, columns, aliases, cache_obj
+        if not columns:
+            self.columns = [c for c in self.parent.columns if '.' not in c]
         self.cache = (cache_obj != None)
-        self.mapping = (dict(zip(columns, aliases)) if aliases else {}) 
+        self.mapping = (dict(zip(columns, aliases)) if aliases else {})
 
         # Check if columns are available
-        assert all(c in parent.columns for c in columns) 
+        self.check(needed=columns, reference=parent.columns)
         if aliases: 
             self.columns = [self.mapping.get(c, c) for c in parent.columns]
 
@@ -274,7 +279,7 @@ class CalculationNode(BaseNode):
         self.cache = (cache_obj != None)
 
         # Check if columns are available
-        assert all(c in parent.columns for c in column.required)  
+        self.check(needed=column.required, reference=parent.columns)
         self.columns = parent.columns + [key]
     
         # Forward propagation of nodes
@@ -307,7 +312,7 @@ class FillNanNode(BaseNode):
     def __init__(self, parent, columns, value, cache_obj=None):
         self.parent, self.nan_columns, self.value, self.cache_obj = parent, columns, value, cache_obj
         self.cache = (cache_obj != None)
-        assert all(c in parent.columns for c in self.nan_columns) 
+        self.check(needed=self.nan_columns, reference=parent.columns)
         self.columns = parent.columns
 
         # Forward propagation of nodes
@@ -325,7 +330,7 @@ class CastNode(BaseNode):
     def __init__(self, parent, dtypes, cache_obj=None):
         self.parent, self.dtypes, self.cache_obj = parent, dtypes, cache_obj
         self.cache = (cache_obj != None)
-        assert all(c in parent.columns for c in dtypes.keys()) 
+        self.check(needed=self.dtypes.keys(), reference=parent.columns)
         self.columns = parent.columns
 
         # Forward propagation of nodes
@@ -338,3 +343,17 @@ class CastNode(BaseNode):
             t = t.drop([c])
             t = t.append_column(c, arr)
         return t
+
+class DropNode(BaseNode):
+    def __init__(self, parent, columns, cache_obj=None):
+        self.parent, self.drop_columns, self.cache_obj = parent, (columns if isinstance(columns, list) else [columns]), cache_obj
+        self.cache = (cache_obj != None)
+        self.check(needed=self.drop_columns, reference=parent.columns)
+        self.columns = [c for c in parent.columns if c not in self.drop_columns]
+
+        # Forward propagation of nodes
+        self.columns_source, self.columns_forward, self.filters_forward = parent.columns_source, parent.columns_forward, parent.filters_forward
+    
+    def fetch(self, verbose):
+        t = self.parent.get(verbose)
+        return t.drop(self.drop_columns)
