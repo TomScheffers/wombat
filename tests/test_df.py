@@ -56,7 +56,7 @@ df.select()
 df.drop('economical_sum')
 
 # You do not need to catch the return for chaining of operations
-df.orderby('abc', ascending=False)
+df.orderby('stock', ascending=False)
 
 # Collect is used to execute the plan
 r = df.collect()

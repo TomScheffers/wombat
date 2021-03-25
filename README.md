@@ -52,6 +52,7 @@ df['stock'] = df['economical'].coalesce(0).least(df['technical']).greatest(0)
 
 # A column reference can be used for numerical & logical operations
 df['calculated'] = ((df['stock'] - 100) ** 2 / 5000 - df['stock']).clip(None, 5000)
+df['check'] = ~(df['calculated'] == 5000) and (df['stock'] > 10000)
 
 # We can filter using the boolean column as value
 df[~(df['calculated'] == 5000)]
@@ -87,6 +88,10 @@ head(r)
 ### To Do's
 - [ ] Add unit tests using pytest
 - [ ] Add more join options (left, right, outer, full, cross)
+- [ ] Track schema in forward pass
+- [ ] Improve groupify operation for multi columns joins / groups
+- [ ] Serialize cache (to disk)
+- [ ] Serialize database (to disk)
 
 ## Contributing
 Pull requests are very welcome, however I believe in 80% of the utility in 20% of the code. I personally get lost reading the tranches of complicated code bases. If you would like to seriously improve this work, please let me know!
