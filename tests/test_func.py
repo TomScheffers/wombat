@@ -21,10 +21,7 @@ for key, value in groupby(t, ['Animal']):
     head(value)
 
 print("Aggregrations:")
-g = groupby(t, ['Animal']).median()
-g = groupby(t, ['Animal']).sum()
-g = groupby(t, ['Animal']).min()
-g = groupby(t, ['Animal']).agg({'Max Speed': 'max'})
+g = groupby(t, ['Animal']).agg({'Max Speed': 'max', 'Max Speed Avg.': ('Max Speed', 'mean')})
 head(g)
 
 # Filters

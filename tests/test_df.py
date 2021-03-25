@@ -25,6 +25,7 @@ df = df.filter([('org_key', '=', 0), ('store_key', '<=', 200)]) \
         by=['option_key'],
         methods={
             'economical': 'sum', 
+            'economical avg': ('economical', 'mean'),
             'technical':'max'
         }
     )

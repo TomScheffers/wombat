@@ -10,7 +10,7 @@ d1 = pq.ParquetDataset('data/skus')
 d2 = pq.ParquetDataset('data/stock_current')
 
 # Database and register tables
-db = Engine(cache=True)
+db = Engine()
 db.register_dataset('skus', d1)
 db.register_dataset('stock_current', d2)
 
