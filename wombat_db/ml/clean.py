@@ -92,8 +92,8 @@ class TableCleaner():
                 self.columns.append(CategoricalColumn(**column))  
         return self
     
-    def register_numeric(self, name, impute='mean', clip=True):
-        self.columns.append(NumericalColumn(name, impute, clip))
+    def register_numeric(self, name, impute='mean', clip=True, v_min=None, v_mean=None, v_max=None):
+        self.columns.append(NumericalColumn(name, impute, clip, v_min, v_mean, v_max))
 
     def register_label(self, name, categories=[]):
         self.columns.append(CategoricalColumn(name, method='label', categories=categories))
