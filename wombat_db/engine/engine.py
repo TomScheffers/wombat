@@ -3,7 +3,7 @@ from wombat_db.engine.sql import parse_sql
 from wombat_db.engine.column import ColumnNode
 
 # Computation plan (of multiple nodes)
-class Plan():
+class ExecutionPlan():
     def __init__(self, node):
         self.database, self.last, self.cache_obj = node.database, node, node.cache_obj
 
@@ -30,6 +30,7 @@ class Plan():
         self.last.backward(columns_backward=self.last.columns_forward, filters_backward=self.last.filters_forward)
         return self.last.get(verbose)
 
+    # Numerical operations
     def filter(self, filters):
         self.last = FilterNode(self.last, filters, cache_obj=self.cache_obj)
         return self
@@ -51,7 +52,10 @@ class Plan():
         return self
 
     def select(self, columns=[]):
-        self.last = SelectionNode(self.last, columns, cache_obj=self.cache_obj)
+        if columns:
+            self.last = SelectionNode(self.last, columns, cache_obj=self.cache_obj)
+        else:
+            self.last = SelectionNode(self.last, self.last.columns, cache_obj=self.cache_obj)
         return self
 
     def drop(self, columns=[]):
@@ -73,6 +77,11 @@ class Plan():
     def udf(self, name, arguments):
         return ColumnNode.udf(name=name, function=self.database.udfs[name], arguments=arguments)
 
+    # Properties
+    def columns(self):
+        return self.last.columns
+
+    # Other utilities
     def plot(self, name):
         from graphviz import Digraph
         dot = Digraph()
@@ -152,9 +161,9 @@ class Engine():
     def select(self, name):
         # Return a plan from a source node
         if name in self.tables.keys():
-            return Plan(TableNode(name, self, cache_obj=self.cache_obj))
+            return ExecutionPlan(TableNode(name, self, cache_obj=self.cache_obj))
         elif name in self.datasets.keys():
-            return Plan(DatasetNode(name, self, cache_obj=self.cache_obj))
+            return ExecutionPlan(DatasetNode(name, self, cache_obj=self.cache_obj))
         else:
             raise Exception("{} not in registered tables or datasets".format(name))
 

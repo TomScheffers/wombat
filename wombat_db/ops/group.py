@@ -14,6 +14,8 @@ agg_methods = {
     'prod': np.prod,
     'std': np.std,
     'var': np.var,
+    'first': lambda a: a[0],
+    'last': lambda a: a[-1],
 }
 def add_agg_method(self, name, method):
     def f(agg_columns=[]):

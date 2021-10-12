@@ -60,7 +60,7 @@ df.drop('economical_sum')
 df.orderby('stock', ascending=False)
 
 # Collect is used to execute the plan
-r = df.collect()
+r = df.collect(verbose=True)
 head(r)
 
 # Cache is hit when same operations are repeated

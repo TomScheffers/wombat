@@ -3,7 +3,7 @@ from setuptools import Extension
 import numpy as np
 from Cython.Build import cythonize
 
-__version__ = "0.0.6"
+__version__ = "0.0.7"
 
 extensions = [
     Extension(
@@ -33,6 +33,6 @@ setup(
     ext_modules=cythonize(extensions),
     install_requires=[
         'numpy>=1.19.2',
-        'pyarrow>=3.0'
+        'pyarrow>=5.0.0'
     ],
 )

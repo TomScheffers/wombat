@@ -1,4 +1,6 @@
 import numpy as np
+import pyarrow as pa
+import pyarrow.compute as pc
 
 def groupify_array(arr):
     # Input: Pyarrow/Numpy array
@@ -14,15 +16,44 @@ def groupify_array(arr):
 def combine_column(table, name):
     return table.column(name).combine_chunks()
 
+def _dictionary_and_indices(column):
+    assert isinstance(column, pa.ChunkedArray)
+
+    if not isinstance(column.type, pa.DictionaryType):
+        column = pc.dictionary_encode(column, null_encoding_behavior='encode')
+
+    dictionary = column.chunk(0).dictionary
+    indices = pa.chunked_array([c.indices for c in column.chunks])
+
+    if indices.null_count != 0:
+        # We need nulls to be in the dictionary so that indices can be
+        # meaningfully multiplied, so we must round trip through decoded
+        column = pc.take(dictionary, indices)
+        return _dictionary_and_indices(column)
+
+    return dictionary, indices
+
 f = np.vectorize(hash)
 def columns_to_array(table, columns):
     columns = ([columns] if isinstance(columns, str) else list(set(columns)))
-    if len(columns) == 1:
-        #return combine_column(table, columns[0]).to_numpy(zero_copy_only=False)
-        return f(combine_column(table, columns[0]).to_numpy(zero_copy_only=False))
-    else:
-        values = [c.to_numpy() for c in table.select(columns).itercolumns()]
-        return np.array(list(map(hash, zip(*values))))
+    combined_indices = None
+    for c in columns:
+        dictionary, indices = _dictionary_and_indices(table.column(c))
+        if combined_indices is None:
+            combined_indices = indices
+        else:
+            combined_indices = pc.add(
+                pc.multiply(combined_indices, len(dictionary)),
+                indices
+            )
+    return combined_indices.to_numpy()
+
+    # if len(columns) == 1:
+    #     return f(combine_column(table, columns[0]).to_numpy(zero_copy_only=False))
+    # else:
+    #     values = [c.to_numpy() for c in table.select(columns).itercolumns()]
+    #     return np.array(list(map(hash, zip(*values))))
+
 
 # Old helpers
 
