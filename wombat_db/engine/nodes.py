@@ -56,8 +56,8 @@ class TableNode(BaseNode):
     def __init__(self, table, database, cache_obj=None):
         self.table, self.database, self.cache_obj = table, database, cache_obj
         self.cache = (cache_obj != None)
-        self.table = self.database.tables[table]
-        self.columns = self.table.column_names
+        self.t = self.database.tables[table]
+        self.columns = self.t.column_names
         self.columns += list(set([c.split('.')[0] for c in self.columns if '.' in c]))
 
         # Forward propagation of nodes
@@ -65,11 +65,11 @@ class TableNode(BaseNode):
 
     def backward(self, columns_backward=[], filters_backward=[]):
         self.columns_bw(columns_backward)
-        self.filters = self.filters_backward
+        self.filters = filters_backward
         return self.hash()
 
     def fetch(self, verbose):
-        t = self.table.select(self.columns_backward)
+        t = self.t.select(self.columns_backward)
         tf = (filters(t, self.filters) if self.filters else t)
         return tf
 
@@ -171,21 +171,7 @@ class JoinNode(BaseNode):
     def fetch(self, verbose):
         tl = self.left.get(verbose)
         tr = self.right.get(verbose)
-        on = []
-        for i, o in enumerate(self.on):
-            l_mmx, r_mmx = column_min_max(tl.column(o).combine_chunks()), column_min_max(tr.column(o).combine_chunks())
-
-            # Skip if there is only 1 value in both tables
-            if (l_mmx == r_mmx) and (l_mmx[0] == l_mmx[1]):
-                continue
-            
-            # Add column to join condition
-            on.append(o)
-
-            # Filter min max values, before joining
-            # tlf = filters(tl, [(o, '>=', max(l_mmx[0], r_mmx[0])), (o, '<=', min(l_mmx[1], r_mmx[1]))])
-            # trf = filters(tr, [(o, '>=', max(l_mmx[0], r_mmx[0])), (o, '<=', min(l_mmx[1], r_mmx[1]))])
-        return join(left=tl, right=tr, on=on)
+        return join(left=tl, right=tr, on=self.on)
 
 class FilterNode(BaseNode):
     def __init__(self, parent, filters, cache_obj=None):

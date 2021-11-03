@@ -33,7 +33,6 @@ def _dictionary_and_indices(column):
 
     return dictionary, indices
 
-f = np.vectorize(hash)
 def columns_to_array(table, columns):
     columns = ([columns] if isinstance(columns, str) else list(set(columns)))
     combined_indices = None
@@ -47,13 +46,6 @@ def columns_to_array(table, columns):
                 indices
             )
     return combined_indices.to_numpy()
-
-    # if len(columns) == 1:
-    #     return f(combine_column(table, columns[0]).to_numpy(zero_copy_only=False))
-    # else:
-    #     values = [c.to_numpy() for c in table.select(columns).itercolumns()]
-    #     return np.array(list(map(hash, zip(*values))))
-
 
 # Old helpers
 
