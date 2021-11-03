@@ -11,6 +11,7 @@ agg_methods = {
     'median': np.median,
     'count': np.size,
     'distinct_count': lambda a: np.unique(a).size,
+    'distinct_sets': lambda a: len(set(a)),
     'prod': np.prod,
     'std': np.std,
     'var': np.var,
