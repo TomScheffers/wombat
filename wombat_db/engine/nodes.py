@@ -1,4 +1,5 @@
 import pyarrow as pa
+import pyarrow.parquet as pq
 import numpy as np
 from wombat_db.ops import join, groupby, filters
 from wombat_db.engine.column import ColumnNode
@@ -131,9 +132,34 @@ class DatasetNode(BaseNode):
         ts = []
         for i, p in enumerate(self.dataset.pieces):
             if self.partition_check(self.partition_values[i], self.part_filters):
-                ts.append(p.read(columns=[c for c in self.columns_backward if c not in self.partition_keys], partitions=self.dataset.partitions))
-        t = pa.concat_tables(ts)
-        return (filters(t, self.value_filters) if self.value_filters else t)
+                t = p.read(
+                    columns=[c for c in self.columns_backward if c not in self.partition_keys], 
+                    partitions=self.dataset.partitions
+                )
+                ts.append(t)
+        table = pa.concat_tables(ts)
+        return (filters(table, self.value_filters) if self.value_filters else table)
+
+    def fetch_v2(self, verbose):
+        ts = []
+        columns = [c for c in self.columns_backward if c not in self.partition_keys]
+        read_filters, final_filters = [v for v in self.value_filters if '.' not in v[0]], [v for v in self.value_filters if '.' in v[0]]        
+        for i, p in enumerate(self.dataset.pieces):
+            if self.partition_check(self.partition_values[i], self.part_filters):
+                # Read filtered parquet tables
+                t = pq.read_table(
+                    source=p.path,
+                    columns=columns, 
+                    use_legacy_dataset=False,
+                    filters=read_filters
+                )
+
+                # Add Partitions & append
+                for k, v in  self.partition_values[i].items():
+                    t = t.append_column(k, pa.array([v for i in range(t.num_rows)]))
+                ts.append(t)  
+        table = pa.concat_tables(ts)
+        return (filters(table, final_filters) if final_filters else table)
 
 # Operations
 def column_min_max(arr):
