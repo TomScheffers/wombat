@@ -47,6 +47,22 @@ def columns_to_array(table, columns):
             )
     return combined_indices.to_numpy()
 
+def tables_to_arrays(table1, table2, columns):
+    columns = ([columns] if isinstance(columns, str) else list(set(columns)))
+    combined_indices = None
+    len1, len2 = table1.num_rows, table2.num_rows 
+    for c in columns:
+        arr1, arr2 = combine_column(table1, c), combine_column(table2, c)
+        dictionary, indices = _dictionary_and_indices(pa.chunked_array(pa.concat_arrays([arr1, arr2.cast(arr1.type)])))
+        if combined_indices is None:
+            combined_indices = indices
+        else:
+            combined_indices = pc.add(
+                pc.multiply(combined_indices, len(dictionary)),
+                indices
+            )
+    return combined_indices[:len1].to_numpy(), combined_indices[len1:].to_numpy()
+
 # Old helpers
 
 # Splitting tables by columns
